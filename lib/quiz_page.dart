@@ -3,19 +3,20 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:temp/constants.dart';
+import 'constants.dart';
 
 class QuizPage extends StatefulWidget {
   final List<dynamic> quizData;
+  final String docId;
 
-  const QuizPage({super.key, required this.quizData});
+  const QuizPage({super.key, required this.quizData, required this.docId});
 
   @override
   State<QuizPage> createState() => _QuizPageState();
 }
 
 class _QuizPageState extends State<QuizPage> {
-  bool _isLoading = false;
+  // _isLoading 상태 변수 제거 (showDialog로 로딩 처리)
   int currentIndex = 0;
   int correctCount = 0;
   TextEditingController answerController = TextEditingController();
@@ -69,10 +70,6 @@ class _QuizPageState extends State<QuizPage> {
   }
 
   void showWordCloud(String title) async {
-    setState(() {
-      _isLoading = true;
-    });
-
     // 로딩 다이얼로그 띄우기
     showDialog(
       context: context,
@@ -81,14 +78,19 @@ class _QuizPageState extends State<QuizPage> {
     );
 
     try {
+      // URL을 서버 엔드포인트에 맞게 수정
+      // Uri.encodeComponent로 제목의 공백 등 특수문자 처리
       final response = await http.get(
-        Uri.parse('$baseUrl/wordcloud?title=$title'),
+        Uri.parse(
+            '$baseUrl/wordcloud/${widget.docId}/${Uri.encodeComponent(title)}'),
       );
 
       Navigator.pop(context); // 로딩 인디케이터 닫기
 
       if (response.statusCode == 200) {
-        final imagePath = jsonDecode(response.body)['image_path'];
+        // 서버 응답 키(wordcloud_url)에 맞게 JSON 파싱
+        final String imageUrl = jsonDecode(response.body)['wordcloud_url'];
+
         showDialog(
           context: context,
           builder: (context) => Dialog(
@@ -99,8 +101,21 @@ class _QuizPageState extends State<QuizPage> {
                   Hero(
                     tag: 'wordcloud',
                     child: Image.network(
-                      '$baseUrl/$imagePath',
+                      imageUrl, // GCS Public URL 직접 사용
                       fit: BoxFit.cover,
+                      // 로딩 중/에러 발생 시 처리
+                      loadingBuilder: (context, child, loadingProgress) {
+                        if (loadingProgress == null) return child;
+                        return const Padding(
+                          padding: EdgeInsets.all(32.0),
+                          child: CircularProgressIndicator(),
+                        );
+                      },
+                      errorBuilder: (context, error, stackTrace) =>
+                          const Padding(
+                        padding: EdgeInsets.all(32.0),
+                        child: Icon(Icons.error, color: Colors.red),
+                      ),
                     ),
                   ),
                   TextButton(
@@ -129,13 +144,12 @@ class _QuizPageState extends State<QuizPage> {
         );
       }
     } catch (e) {
-      Navigator.pop(context); // 로딩 인디케이터 닫기
-      print("요청 중 오류 발생: $e");
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context); // 로딩 인디케이터 닫기
+      }
+      print("워드클라우드 요청 중 오류 발생: $e");
     }
+    // 'finally' 블록과 _isLoading 상태 관리는 로딩 다이얼로그 방식으로 대체되었으므로 제거
   }
 
   @override
@@ -148,44 +162,47 @@ class _QuizPageState extends State<QuizPage> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Text('문제 ${currentIndex + 1} / ${widget.quizData.length}',
-                style: const TextStyle(fontSize: 20)),
-            const SizedBox(height: 16),
-            ...quiz['summary']
-                .split('\n')
-                .map<Widget>((line) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Text(line, style: const TextStyle(fontSize: 16)),
-                    ))
-                .toList(),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8.0,
-              children: quiz['keywords']
-                  .map<Widget>((kw) => Chip(label: Text(kw)))
+        child: SingleChildScrollView(
+          // 스크롤 가능하도록 SingleChildScrollView 추가
+          child: Column(
+            children: [
+              Text('문제 ${currentIndex + 1} / ${widget.quizData.length}',
+                  style: const TextStyle(fontSize: 20)),
+              const SizedBox(height: 16),
+              ...quiz['summary']
+                  .split('\n')
+                  .map<Widget>((line) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Text(line, style: const TextStyle(fontSize: 16)),
+                      ))
                   .toList(),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: answerController,
-              decoration: const InputDecoration(
-                labelText: '노래 제목 입력',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8.0,
+                children: (quiz['keywords'] as List) // 타입 명시
+                    .map<Widget>((kw) => Chip(label: Text(kw.toString())))
+                    .toList(),
               ),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: checkAnswer,
-              child: const Text('정답 제출'),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () => showWordCloud(quiz['title']),
-              child: const Text('힌트(워드클라우드) 보기'),
-            ),
-          ],
+              const SizedBox(height: 20),
+              TextField(
+                controller: answerController,
+                decoration: const InputDecoration(
+                  labelText: '노래 제목 입력',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: checkAnswer,
+                child: const Text('정답 제출'),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: () => showWordCloud(quiz['title']),
+                child: const Text('힌트(워드클라우드) 보기'),
+              ),
+            ],
+          ),
         ),
       ),
     );
